@@ -1,73 +1,58 @@
-# React + TypeScript + Vite
+# Markdown to Slack
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Overview
+A web application that converts rich Markdown text (from ChatGPT, Notion, etc.) into Slack's `mrkdwn` format. It ensures that tables, nested lists, and headers are displayed correctly in Slack without breaking the layout.
 
-Currently, two official plugins are available:
+Features:
+- **Table Conversion**: Converts Markdown tables into ASCII-aligned code blocks or list-style formats for mobile readability.
+- **List Preservation**: Handles nested lists with proper indentation using full-width spaces.
+- **Header Formatting**: Converts headers to bold text or emoji-prefixed styles.
+- **Privacy First**: All processing works client-side; no data is sent to any server.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Tech Stack
+- **Frontend**: React 19, TypeScript
+- **Build Tool**: Vite 6
+- **Styling**: Tailwind CSS v4
+- **Libraries**: 
+  - `markdown-it` (Markdown parsing)
+  - `wcwidth` (Character width calculation for table alignment)
+  - `lucide-react` (Icons)
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+# Install dependencies
+pnpm install
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Start development server
+pnpm dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Usage
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+1. Paste your Markdown text into the left input panel.
+2. Select options (if needed):
+   - **Header Style**: Simple (Bold) or Emoji.
+   - **Table Style**: Code Block (Recommended for PC) or List Style (Recommended for Mobile).
+3. Click the **Copy** button on the right panel.
+4. Paste the result into Slack.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Directory Structure
 ```
+.
+├── src/
+│   ├── assets/       # Static assets
+│   ├── lib/          # Core conversion logic
+│   │   └── converter.ts
+│   ├── App.tsx       # Main application component
+│   ├── main.tsx      # Entry point
+│   └── index.css     # Tailwind CSS entry
+├── public/           # Public static files
+├── package.json
+├── tsconfig.json
+└── vite.config.ts
+```
+
+## License
+
+This repository is for personal/private use only.
