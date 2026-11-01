@@ -1,11 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { Copy, Check, Settings } from 'lucide-react';
 import classNames from 'classnames';
 import { convertToSlack, type ConversionOptions } from './lib/converter';
 
 export default function App() {
   const [input, setInput] = useState('');
-  const [output, setOutput] = useState('');
   const [copied, setCopied] = useState(false);
   const [options, setOptions] = useState<ConversionOptions>({
     tableStyle: 'codeblock',
@@ -14,11 +13,7 @@ export default function App() {
   const [isOptionsOpen, setIsOptionsOpen] = useState(false);
   
   // Real-time conversion
-  useEffect(() => {
-    // console.log('Converting with options:', options);
-    const result = convertToSlack(input, options);
-    setOutput(result);
-  }, [input, options]);
+  const output = useMemo(() => convertToSlack(input, options), [input, options]);
 
   const handleCopy = async () => {
     if (!output) return;

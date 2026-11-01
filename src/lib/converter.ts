@@ -1,5 +1,5 @@
-import MarkdownIt from 'markdown-it';
-import wcwidth from 'wcwidth';
+import MarkdownIt, { type Token } from 'markdown-it';
+import { getStringWidth } from './string-width.ts';
 
 export type ConversionOptions = {
   tableStyle: 'codeblock' | 'list';
@@ -122,7 +122,12 @@ export function convertToSlack(markdown: string, options: ConversionOptions): st
   return result.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function renderInline(children: any[]): string {
+type InlineRenderOptions = {
+  // Drop bold markers when the caller already wraps the text in *bold*, otherwise Slack gets `**text**`
+  skipStrong?: boolean;
+};
+
+function renderInline(children: Token[] | null, options: InlineRenderOptions = {}): string {
 
   let text = '';
   if (!children) return text;
@@ -131,9 +136,9 @@ function renderInline(children: any[]): string {
     if (child.type === 'text') {
       text += child.content;
     } else if (child.type === 'strong_open') {
-        text += '*';
+        if (!options.skipStrong) text += '*';
     } else if (child.type === 'strong_close') {
-        text += '*';
+        if (!options.skipStrong) text += '*';
     } else if (child.type === 'em_open') {
         text += '_';
     } else if (child.type === 'em_close') {
@@ -168,9 +173,12 @@ function renderInline(children: any[]): string {
 
 // Helper to extract plain text from inline tokens for table cells
 // In code blocks, we can't use Slack styles like *bold*, so we just want the text.
-function getPlainText(children: any[]): string {
+function getPlainText(children: Token[] | null): string {
     let text = '';
     if (!children) return text;
+
+    let linkHref: string | null = null;
+    let linkStart = 0;
 
     for (const child of children) {
         if (child.type === 'text') {
@@ -181,104 +189,115 @@ function getPlainText(children: any[]): string {
             text += ' '; // Convert breaks to space in table cells
         } else if (child.type === 'image') {
             text += child.content || ''; // Use alt text for images
+        } else if (child.type === 'link_open') {
+            // Bare URLs (linkify / <autolink>) already show the URL as their text
+            const isBareUrl = child.markup === 'linkify' || child.markup === 'autolink';
+            const href = child.attrGet('href');
+            linkHref = isBareUrl || href === null ? null : String(href);
+            linkStart = text.length;
+        } else if (child.type === 'link_close') {
+            // Links aren't clickable inside a code block, so keep the URL visible next to the label
+            const label = text.slice(linkStart);
+            if (linkHref && label !== linkHref) text += label ? ` (${linkHref})` : linkHref;
+            linkHref = null;
         }
     }
     return text;
 }
 
-function renderTableAsCodeBlock(tokens: any[]): string {
-    const headers: string[][] = [];
-    const bodies: string[][] = [];
-    let currentRow: string[] = [];
-    let inHead = false;
+type CellAlign = 'left' | 'center' | 'right';
 
-    // First ensure we have tokens to parse
-    if (!tokens || tokens.length === 0) return '';
+type TableCell = {
+    children: Token[];
+    align: CellAlign;
+};
+
+// Keep each cell's inline tokens so each table style can decide how to render them
+function parseTable(tokens: Token[]): { headers: TableCell[][]; bodies: TableCell[][] } {
+    const headers: TableCell[][] = [];
+    const bodies: TableCell[][] = [];
+    let currentRow: TableCell[] = [];
+    let inHead = false;
 
     for (let i = 0; i < tokens.length; i++) {
         const t = tokens[i];
-        
+
         if (t.type === 'thead_open') {
             inHead = true;
-            continue;
-        }
-        if (t.type === 'thead_close') {
+        } else if (t.type === 'thead_close') {
             inHead = false;
-            continue;
-        }
-        if (t.type === 'tr_open') {
+        } else if (t.type === 'tr_open') {
             currentRow = [];
-            continue;
-        }
-        if (t.type === 'tr_close') {
+        } else if (t.type === 'tr_close') {
             if (inHead) {
                 headers.push(currentRow);
             } else {
                 bodies.push(currentRow);
             }
-            continue;
-        }
-        if (t.type === 'th_open' || t.type === 'td_open') {
+        } else if (t.type === 'th_open' || t.type === 'td_open') {
             // content is in the next inline token
-            // basic check to enable safe access
-            if (i + 1 < tokens.length && tokens[i+1].type === 'inline') {
-                // Use getPlainText instead of raw content
-                currentRow.push(getPlainText(tokens[i+1].children));
-            } else {
-                currentRow.push('');
-            }
+            const next = tokens[i + 1];
+            currentRow.push({
+                children: next?.type === 'inline' ? next.children || [] : [],
+                align: getCellAlign(t),
+            });
         }
     }
 
+    return { headers, bodies };
+}
+
+// markdown-it stores `:---:` / `---:` as style="text-align:..." on every cell of the column
+function getCellAlign(token: Token): CellAlign {
+    const style = token.attrGet('style');
+    if (style === 'text-align:center') return 'center';
+    if (style === 'text-align:right') return 'right';
+    return 'left';
+}
+
+function padCell(text: string, width: number, align: CellAlign): string {
+    const padding = Math.max(0, width - getStringWidth(text));
+    if (align === 'right') return ' '.repeat(padding) + text;
+    if (align === 'center') {
+        const left = Math.floor(padding / 2);
+        return ' '.repeat(left) + text + ' '.repeat(padding - left);
+    }
+    return text + ' '.repeat(padding);
+}
+
+function renderTableAsCodeBlock(tokens: Token[]): string {
+    const { headers, bodies } = parseTable(tokens);
     if (headers.length === 0 && bodies.length === 0) return '';
 
-    // Calculate widths
-    const allRows = [...headers, ...bodies];
-    const colWidths = new Map<number, number>();
-    
-    allRows.forEach(row => {
+    const toTextRows = (rows: TableCell[][]) =>
+        rows.map(row => row.map(cell => ({ text: getPlainText(cell.children), align: cell.align })));
+    const headerRows = toTextRows(headers);
+    const bodyRows = toTextRows(bodies);
+
+    // Measure display columns, including CJK and emoji sequences.
+    const colWidths: number[] = [];
+    [...headerRows, ...bodyRows].forEach(row => {
         row.forEach((cell, idx) => {
-            const w = Math.max(0, wcwidth(cell));
-            const currentMax = colWidths.get(idx) || 0;
-            if (w > currentMax) colWidths.set(idx, w);
+            colWidths[idx] = Math.max(colWidths[idx] || 0, getStringWidth(cell.text));
         });
     });
 
+    const renderRow = (row: { text: string; align: CellAlign }[]) =>
+        '|' + row.map((cell, idx) => ` ${padCell(cell.text, colWidths[idx], cell.align)} |`).join('') + '\n';
+
     let result = '```\n';
-    
-    // Render Header
-    headers.forEach(row => {
-        let line = '|';
-        row.forEach((cell, colIndex) => {
-            const width = colWidths.get(colIndex) || 0;
-            const cellWidth = Math.max(0, wcwidth(cell));
-            const padding = Math.max(0, width - cellWidth);
-            line += ' ' + cell + ' '.repeat(padding) + ' |'; // Left align
-        });
-        result += line + '\n';
+
+    headerRows.forEach(row => {
+        result += renderRow(row);
     });
 
     // Render Separator (if there is a header or at least one row to define columns)
-    if (headers.length > 0) {
-        let sepLine = '|';
-        const colCount = colWidths.size;
-        for(let i=0; i<colCount; i++) {
-            const width = colWidths.get(i) || 0;
-             sepLine += '-'.repeat(width + 2) + '|';
-        }
-        result += sepLine + '\n';
+    if (headerRows.length > 0) {
+        result += '|' + colWidths.map(width => '-'.repeat(width + 2) + '|').join('') + '\n';
     }
 
-    // Render Body
-    bodies.forEach(row => {
-        let line = '|';
-        row.forEach((cell, colIndex) => {
-             const width = colWidths.get(colIndex) || 0;
-             const cellWidth = Math.max(0, wcwidth(cell));
-             const padding = Math.max(0, width - cellWidth);
-            line += ' ' + cell + ' '.repeat(padding) + ' |';
-        });
-        result += line + '\n';
+    bodyRows.forEach(row => {
+        result += renderRow(row);
     });
 
     result += '```\n';
@@ -286,73 +305,43 @@ function renderTableAsCodeBlock(tokens: any[]): string {
 }
 
 
-function renderTableAsList(tokens: any[]): string {
-    const headers: string[][] = [];
-    const bodies: string[][] = [];
-    let currentRow: string[] = [];
-    let inHead = false;
+function renderTableAsList(tokens: Token[]): string {
+    const { headers, bodies } = parseTable(tokens);
 
-    if (!tokens || tokens.length === 0) return '';
+    // For list view, we WANT rich text!
+    // Use the first header row if available
+    const headerRow = headers.length > 0 ? headers[0].map(cell => renderInline(cell.children)) : [];
 
-    for (let i = 0; i < tokens.length; i++) {
-        const t = tokens[i];
-        
-        if (t.type === 'thead_open') {
-            inHead = true;
-            continue;
-        }
-        if (t.type === 'thead_close') {
-            inHead = false;
-            continue;
-        }
-        if (t.type === 'tr_open') {
-            currentRow = [];
-            continue;
-        }
-        if (t.type === 'tr_close') {
-            if (inHead) {
-                headers.push(currentRow);
-            } else {
-                bodies.push(currentRow);
-            }
-            continue;
-        }
-        if (t.type === 'th_open' || t.type === 'td_open') {
-            if (i + 1 < tokens.length && tokens[i+1].type === 'inline') {
-                // For list view, we WANT rich text!
-                // We use renderInline to process the inline children
-                currentRow.push(renderInline(tokens[i+1].children));
-            } else {
-                currentRow.push('');
-            }
-        }
+    if (bodies.length === 0) {
+        // Header-only table: keep the column names instead of dropping the table
+        const names = headerRow.filter(Boolean);
+        return names.length > 0 ? `${BULLET_POINT} ${names.join(' / ')}\n` : '';
     }
 
-    if (bodies.length === 0) return '';
-
-    // Use the first header row if available
-    const headerRow = headers.length > 0 ? headers[0] : [];
-    
     let result = '';
 
-    bodies.forEach((row, rowIndex) => {
+    bodies.forEach((cells, rowIndex) => {
+        const row = cells.map(cell => renderInline(cell.children));
+        // The first column is wrapped in *bold* below, so render it without its own bold markers
+        const key = renderInline(cells[0]?.children ?? null, { skipStrong: true });
+
         // Add a separator between rows if it's not the first row, primarily for multi-column readability
         // But for simple 2-col key-value, tight list is better.
         const isTwoCol = headerRow.length === 2 && row.length === 2;
-        
+
         if (isTwoCol) {
             // 2-Column Key-Value optimization
             // headers are ignored in output, 1st col is key, 2nd is value
             // Format: • *Key*: Value
-            result += `${BULLET_POINT} *${row[0]}*: ${row[1]}\n`;
+            result += `${BULLET_POINT} ${key ? `*${key}*: ` : ''}${row[1]}\n`;
         } else {
             // Multi-column generic fallback
-            
+
             if (rowIndex > 0) result += '\n'; // Spacer for non-compact rows
-            
+
             // Use first column as the primary item
-            result += `${BULLET_POINT} *${row[0] || 'Item'}*\n`;
-            
+            result += `${BULLET_POINT} *${key || 'Item'}*\n`;
+
             // Render remaining columns as sub-items
             for (let i = 1; i < row.length; i++) {
                  const label = headerRow[i] || `Col ${i + 1}`;

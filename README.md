@@ -11,14 +11,17 @@ Features:
 
 ## Tech Stack
 - **Frontend**: React 19, TypeScript
-- **Build Tool**: Vite 6
+- **Build Tool**: Vite 8
 - **Styling**: Tailwind CSS v4
 - **Libraries**: 
   - `markdown-it` (Markdown parsing)
-  - `wcwidth` (Character width calculation for table alignment)
+  - `@cto.af/string-width` (Unicode display width calculation for table alignment)
+  - `unicode-segmenter` (Grapheme segmentation compatibility for older browsers)
   - `lucide-react` (Icons)
 
 ## Setup
+
+Use Node.js 22.18 or later and pnpm. The test runner uses Node.js's built-in TypeScript support.
 
 ```bash
 # Install dependencies
@@ -27,6 +30,22 @@ pnpm install
 # Start development server
 pnpm dev
 ```
+
+## Verification
+
+```bash
+# Conversion regressions and browser compatibility
+pnpm test
+
+# Static analysis
+pnpm lint
+
+# Type checks and production build
+pnpm build
+```
+
+The browser compatibility test bundles the converter for Firefox 114 and Safari 16.4,
+then runs it without native `Intl.Segmenter` or support for the RegExp `v` flag.
 
 ## Usage
 
